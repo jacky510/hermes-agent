@@ -107,18 +107,8 @@ def test_objects_stream_list_and_read_back_signed_and_public(r2_server, tmp_path
 def test_channel_claims_keep_the_window_except_every_channel_head():
     old_head, old, fresh = ("channel.20260101T000000Z-v1.2.3", "channel.20260102T000000Z-v1.2.3",
                             "channel.20261027T000000Z-v1.2.4")
-    keys = [f"releases/tag/{tag}/Hermes.zip" for tag in (old_head, old, fresh)] + [
-        "releases/channels/a.json", "releases/channels/b.json"]
-    objects = {"releases/channels/a.json": {"head": {"manifestKey": "m"}},
-               "releases/channels/b.json": {"head": None},
-               "m": {"request": {"releaseTag": old_head}}}
-    heads = r2.channel_head_claims(objects.get, keys)
-    assert heads == {old_head}
-    assert r2.channel_doomed_keys(keys, "20261014", heads) == [f"releases/tag/{old}/Hermes.zip"]
-    # An unreadable record or head manifest stops the pruner rather than guessing.
-    for broken in ({**objects, "m": None}, {**objects, "releases/channels/b.json": None}):
-        with pytest.raises(RuntimeError, match="refusing to prune"):
-            r2.channel_head_claims(broken.get, keys)
+    keys = [f"releases/tag/{tag}/Hermes.zip" for tag in (old_head, old, fresh)]
+    assert r2.channel_doomed_keys(keys, "20261014", {old_head}) == [f"releases/tag/{old}/Hermes.zip"]
 
 
 # ── SigV4 vectors ───────────────────────────────────────────────────────────

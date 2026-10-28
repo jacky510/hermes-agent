@@ -665,7 +665,9 @@ def _channel_head_claims() -> set[str] | None:
         found = store.get(key) if key else None
         return json.loads(found[0]) if found is not None else None
 
-    return r2.channel_head_claims(read_json, store.keys("releases/channels/"))
+    from scripts.releases.channel_retention import PreviewRetention
+
+    return PreviewRetention(read_json).live_claims(store.keys("releases/channels/"))
 
 
 def _prune_old_channel_claims(args, push_remote: str) -> None:

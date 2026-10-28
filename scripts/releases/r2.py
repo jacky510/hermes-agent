@@ -862,27 +862,6 @@ def channel_doomed_keys(keys: list[str], cutoff: str, heads: set[str]) -> list[s
             and match[2] < cutoff and match[1] not in heads]
 
 
-def channel_head_claims(read_json: Callable[[str], object], keys: list[str]) -> set[str]:
-    """The claim tag (request releaseTag) of every channel's head build. Fails closed: a record or
-    head manifest that does not read keeps the pruner from running at all."""
-    claims = set()
-    for key in keys:
-        if not (key.startswith("releases/channels/") and key.endswith(".json")):
-            continue
-        record = read_json(key)
-        if not isinstance(record, dict) or "head" not in record:
-            raise RuntimeError(f"Cannot read channel record {key}; refusing to prune")
-        head = record["head"]
-        if head is None:
-            continue
-        manifest = read_json(head.get("manifestKey", "")) if isinstance(head, dict) else None
-        request = manifest.get("request") if isinstance(manifest, dict) else None
-        if not isinstance(request, dict):
-            raise RuntimeError(f"Cannot read the head build of {key}; refusing to prune")
-        if isinstance(request.get("releaseTag"), str):
-            claims.add(request["releaseTag"])
-    return claims
-
 
 def canary_doomed_keys(keys: list[str], cutoff: str) -> list[str]:
     """Keys whose own canary date (YYYYMMDD in the name) is before `cutoff`."""
@@ -1003,9 +982,20 @@ def prune(
     last_modified = listing["lastModified"]
     now = amz_timestamp()
 
+    # Establish expired preview metadata before treating immutable descriptors as live roots.
+    from .channel_retention import channel_retention_plan
+
+    def read_json(key: str) -> object:
+        text = get_object(creds, base, bucket, key, now, fetcher=fetcher) if key else None
+        try:
+            return json.loads(text) if text is not None else None
+        except ValueError:
+            return None
+
+    heads, expired_metadata = channel_retention_plan(read_json, keys, cutoff_date)
     feed_xml_by_dir: dict[str, list[str]] = {}
     protected: set[str] = set()
-    for key in [k for k in keys if k.endswith(".appinstaller")]:
+    for key in [k for k in keys if k.endswith(".appinstaller") and k not in expired_metadata]:
         dir_key = key[: key.rfind("/")]
         xml = get_object(creds, base, bucket, key, now, fetcher=fetcher)
         if not _feed_bundle_uris(xml):
@@ -1043,16 +1033,6 @@ def prune(
     protected.update(live_pool_keys(
         keys, lambda key: get_object(creds, base, bucket, key, now, fetcher=fetcher)))
 
-    # Channel claims keep the canary window, except each channel's current head.
-    def read_json(key: str) -> object:
-        text = get_object(creds, base, bucket, key, now, fetcher=fetcher) if key else None
-        try:
-            return json.loads(text) if text is not None else None
-        except ValueError:
-            return None
-
-    heads = channel_head_claims(read_json, keys)
-
     # Commit builds keep 90 days whatever the canary window (keep_days) is.
     commit_window = max(keep_days, COMMIT_KEEP_DAYS) * 86400
     commit_cutoff_date = time.strftime("%Y%m%d", time.gmtime(current - commit_window))
@@ -1063,6 +1043,7 @@ def prune(
             *stale_feed_bundle_keys(keys, feed_xml_by_dir, last_modified, cutoff_ms),
             *commit_doomed_keys(keys, commit_cutoff_date, last_modified, current - commit_window),
             *channel_doomed_keys(keys, cutoff_date, heads),
+            *expired_metadata,
         ]
         if key not in protected
     ]
@@ -1070,7 +1051,9 @@ def prune(
     if not doomed:
         print(f"OK r2: no canary objects older than {keep_days} days")
         return
-    for key in sorted(doomed):
+    # Requests are the retention evidence for a build: remove them last so an interrupted
+    # deletion can still classify remaining descriptors and archive objects on the next run.
+    for key in sorted(doomed, key=lambda key: (key.endswith("/request.json"), key)):
         if dry_run:
             print(f"(dry-run) would delete r2:{key}")
             continue
