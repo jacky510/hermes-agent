@@ -4,13 +4,17 @@ import path from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { parseArgs } from 'node:util'
 import { fileURLToPath } from 'node:url'
-import { COMMIT_TAG_RE, OUT_OF_STORE_PUBLISHER, channelBuildRequest, releaseVersion } from '../../../scripts/msix-shared.mjs'
+import { CHANNEL_TAG_RE, COMMIT_TAG_RE, OUT_OF_STORE_PUBLISHER, channelBuildRequest, releaseVersion } from '../../../scripts/msix-shared.mjs'
 import { codesignTeam, channelStampAssertions } from './mac-bundled-manifest.cjs'
 
 const identityModule = fileURLToPath(new URL('../../../apps/desktop/product-identity.cjs', import.meta.url))
 
 // A channel build carries its request (identity) and its own claim tag (version, archive).
 function admitChannelRequest(request, commit, tag) {
+  if (request === null) {
+    if (CHANNEL_TAG_RE.test(tag)) throw new Error('Channel claim tag requires its admitted channel request')
+    return null
+  }
   if (tag !== request?.releaseTag || request?.commit !== commit) throw new Error('Channel request conflicts with commit or tag')
   return channelBuildRequest({ ...process.env, HERMES_DESKTOP_VARIANT: 'bundled',
     HERMES_BUILD_COMMIT: '', HERMES_PAYLOAD_TAG: tag, HERMES_PAYLOAD_VERSION: '',
@@ -20,8 +24,8 @@ function admitChannelRequest(request, commit, tag) {
 export function bundleIdentity(commit, tag = '', channelRequest = null) {
   if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error('Expected exact full lowercase commit SHA')
   if (tag && !releaseVersion(tag)) throw new Error('Invalid release tag')
-  if (channelRequest !== null) {
-    const request = admitChannelRequest(channelRequest, commit, tag)
+  const request = admitChannelRequest(channelRequest, commit, tag)
+  if (request !== null) {
     return { appId: request.identity.appId, msixIdentity: request.identity.msixAppIdWithOrg,
       applicationId: request.identity.appNamePascal, publisher: OUT_OF_STORE_PUBLISHER,
       windowsVersion: request.windowsVersion }
@@ -43,7 +47,7 @@ export function bundleIdentity(commit, tag = '', channelRequest = null) {
 export function verifyBundleStamp(stamp, { commit, tag = '', platform, channelRequest = null }) {
   if (!['darwin', 'win32'].includes(platform)) throw new Error('Unsupported native platform')
   if (tag && !releaseVersion(tag)) throw new Error('Invalid release tag')
-  const request = channelRequest === null ? null : admitChannelRequest(channelRequest, commit, tag)
+  const request = admitChannelRequest(channelRequest, commit, tag)
   const commitBuild = !request && (!tag || COMMIT_TAG_RE.test(tag))
   const expected = { commit, tag: tag || null, payload: 'bundled', distribution: 'desktop-app', dirty: false,
     updateMechanism: commitBuild ? 'external' : { darwin: 'electron-updater', win32: 'app-installer' }[platform] }
