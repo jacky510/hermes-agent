@@ -852,6 +852,38 @@ def commit_doomed_keys(keys: list[str], cutoff: str, last_modified: dict[str, fl
     return doomed
 
 
+_CHANNEL_CLAIM_KEY_RE = re.compile(r"^releases/tag/(channel\.(20\d{6})T\d{6}Z-v\d+\.\d+\.\d+)/")
+
+
+def channel_doomed_keys(keys: list[str], cutoff: str, heads: set[str]) -> list[str]:
+    """Channel claim archives whose stamp date is before ``cutoff`` (YYYYMMDD), except the claims a
+    channel head names (``heads``): an installed channel build updates from its head's archive."""
+    return [key for key in keys if (match := _CHANNEL_CLAIM_KEY_RE.match(key)) is not None
+            and match[2] < cutoff and match[1] not in heads]
+
+
+def channel_head_claims(read_json: Callable[[str], object], keys: list[str]) -> set[str]:
+    """The claim tag (request releaseTag) of every channel's head build. Fails closed: a record or
+    head manifest that does not read keeps the pruner from running at all."""
+    claims = set()
+    for key in keys:
+        if not (key.startswith("releases/channels/") and key.endswith(".json")):
+            continue
+        record = read_json(key)
+        if not isinstance(record, dict) or "head" not in record:
+            raise RuntimeError(f"Cannot read channel record {key}; refusing to prune")
+        head = record["head"]
+        if head is None:
+            continue
+        manifest = read_json(head.get("manifestKey", "")) if isinstance(head, dict) else None
+        request = manifest.get("request") if isinstance(manifest, dict) else None
+        if not isinstance(request, dict):
+            raise RuntimeError(f"Cannot read the head build of {key}; refusing to prune")
+        if isinstance(request.get("releaseTag"), str):
+            claims.add(request["releaseTag"])
+    return claims
+
+
 def canary_doomed_keys(keys: list[str], cutoff: str) -> list[str]:
     """Keys whose own canary date (YYYYMMDD in the name) is before `cutoff`."""
     doomed = []
@@ -1011,6 +1043,16 @@ def prune(
     protected.update(live_pool_keys(
         keys, lambda key: get_object(creds, base, bucket, key, now, fetcher=fetcher)))
 
+    # Channel claims keep the canary window, except each channel's current head.
+    def read_json(key: str) -> object:
+        text = get_object(creds, base, bucket, key, now, fetcher=fetcher) if key else None
+        try:
+            return json.loads(text) if text is not None else None
+        except ValueError:
+            return None
+
+    heads = channel_head_claims(read_json, keys)
+
     # Commit builds keep 90 days whatever the canary window (keep_days) is.
     commit_window = max(keep_days, COMMIT_KEEP_DAYS) * 86400
     commit_cutoff_date = time.strftime("%Y%m%d", time.gmtime(current - commit_window))
@@ -1020,6 +1062,7 @@ def prune(
             *canary_doomed_keys(keys, cutoff_date),
             *stale_feed_bundle_keys(keys, feed_xml_by_dir, last_modified, cutoff_ms),
             *commit_doomed_keys(keys, commit_cutoff_date, last_modified, current - commit_window),
+            *channel_doomed_keys(keys, cutoff_date, heads),
         ]
         if key not in protected
     ]
