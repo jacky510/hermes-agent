@@ -138,6 +138,30 @@ def channel_timestamp(tag: Any) -> str | None:
     return match["stamp"] if match else None
 
 
+def claim_stamp(tag: Any) -> str | None:
+    """The UTC stamp of a canary, commit or channel claim tag (its build time), else None."""
+    match = _KIND_TAG_RE.fullmatch(tag.strip()) if isinstance(tag, str) else None
+    return match["stamp"] if match else None
+
+
+def stamped_windows_version(tag: Any) -> str:
+    """The package quad ``yy.mmdd.hh.mmss`` of a stamped claim, from its tag stamp (the same value as
+    scripts/msix-shared.mjs canaryPackageVersionAt). Raises ValueError for any other tag."""
+    from datetime import UTC, datetime
+
+    stamp = claim_stamp(tag)
+    if stamp is None:
+        raise ValueError(f"Not a stamped claim tag: {tag!r}")
+    try:
+        instant = datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+    except ValueError as error:
+        raise ValueError(f"Invalid claim calendar timestamp: {stamp}") from error
+    if instant.strftime("%Y%m%dT%H%M%SZ") != stamp:
+        raise ValueError(f"Invalid claim calendar timestamp: {stamp}")
+    return (f"{instant.year % 100}.{instant.month * 100 + instant.day}.{instant.hour}."
+            f"{instant.minute * 100 + instant.second}")
+
+
 def is_preview_tag(tag: Any) -> bool:
     """True for a commit or channel build claim: it publishes to no release channel, feed, Docker
     tag or Store (a channel build moves only its own R2 channel head, through the channel CAS)."""

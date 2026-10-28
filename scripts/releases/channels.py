@@ -9,7 +9,7 @@ import uuid
 
 from hermes_cli.release_channels import (
     ChannelError, ChannelNotFound, ChannelReader, artifact_key, build_prefix,
-    canonical_json, channel_key, decode_json, package_versions, public_base as validate_public_base,
+    canonical_json, channel_key, decode_json, public_base as validate_public_base,
     validate_name, validate_record, validate_repository, validate_request, validate_manifest, require_sha256,
 )
 from scripts.releases import r2
@@ -210,7 +210,12 @@ class ChannelPublisher:
         return record
 
     def allocate(self, name: str, commit: str, source_version: str,
-                 bundle_env: dict | None = None, controller_commit: str | None = None) -> dict:
+                 bundle_env: dict | None = None, controller_commit: str | None = None, *,
+                 release_tag: str) -> dict:
+        """Reserve the next sequence for one build of ``release_tag``: the channel claim
+        (channel.<stamp>-vX.Y.Z) whose version and stamped Windows quad its packages carry, and
+        whose tag archive holds them. Prefer allocate_claim, which allocates once per claim."""
+        from hermes_cli.update_channel import release_version, stamped_windows_version
         from scripts.releases.bundle_env import validate
         bundle_env = validate({} if bundle_env is None else bundle_env)
         for _ in range(16):
@@ -220,10 +225,11 @@ class ChannelPublisher:
             record, etag = current
             self._preview("allocate", record)
             sequence = record["nextSequence"]
-            version, windows_version = package_versions(sequence)
             request = {"schema": 1, "buildId": uuid.uuid4().hex, "channel": name,
                        "sequence": sequence, "repository": self.repository, "commit": commit,
-                       "sourceVersion": source_version, "version": version, "windowsVersion": windows_version,
+                       "sourceVersion": source_version, "releaseTag": release_tag,
+                       "version": release_version(release_tag),
+                       "windowsVersion": stamped_windows_version(release_tag),
                        "identity": deepcopy(record["identity"]), "bundleEnv": bundle_env,
                        "publicBase": self.public_base}
             if controller_commit is not None:
@@ -241,6 +247,49 @@ class ChannelPublisher:
             self._write(build_prefix(request["buildId"]) + "request.json", request)
             return request
         raise ChannelConflict("Channel allocation remained contended")
+
+    def allocate_claim(self, name: str, release_tag: str, commit: str, source_version: str,
+                       bundle_env: dict | None = None, controller_commit: str | None = None) -> dict:
+        """The one request of a channel claim: allocated on first admission, then found again.
+
+        Admission reruns (a re-run of failed jobs, a retried workflow) must build the same request,
+        so the claim archive holds a write-once pointer, ``releases/tag/<claim>/channel-request.json``.
+        A pointer naming a request for anything but exactly this claim is refused."""
+        from hermes_cli.update_channel import is_channel_tag
+        from scripts.releases.bundle_env import validate
+
+        if not is_channel_tag(release_tag):
+            raise ChannelError(f"Not a channel build claim: {release_tag!r}")
+        bundle_env = validate({} if bundle_env is None else bundle_env)
+        pointer = f"releases/tag/{release_tag}/channel-request.json"
+
+        def matching(found: tuple[bytes, str]) -> dict:
+            value = decode_json(found[0])
+            if not isinstance(value, dict) or set(value) != {"schema", "buildId", "sha256"} or value["schema"] != 1:
+                raise ChannelError("Invalid channel claim request pointer")
+            request = self.request(value["buildId"], value["sha256"])
+            if (request["releaseTag"], request["channel"], request["commit"], request["sourceVersion"],
+                    request["bundleEnv"]) != (release_tag, name, commit, source_version, bundle_env):
+                raise ChannelError("Channel claim already names a different request")
+            return request
+
+        existing = self.store.get(pointer)
+        if existing is not None:
+            return matching(existing)
+        request = self.allocate(name, commit, source_version, bundle_env, controller_commit,
+                                release_tag=release_tag)
+        body = {"schema": 1, "buildId": request["buildId"],
+                "sha256": hashlib.sha256(canonical_json(request)).hexdigest()}
+        try:
+            self.store.put(pointer, canonical_json(body))
+        except ChannelConflict:
+            # A concurrent admission of the same claim won; build its request (this sequence is
+            # simply never published).
+            raced = self.store.get(pointer)
+            if raced is None:
+                raise
+            return matching(raced)
+        return request
 
     def _protected(self, action: str, record: dict, request: dict, policy: str, release_gate) -> None:
         if policy not in {"stable-release", "canary-release"} or record["policy"] != policy:

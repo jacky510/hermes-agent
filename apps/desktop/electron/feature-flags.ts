@@ -28,6 +28,21 @@ export function releaseTagVersion(tag: string | null | undefined): string | null
   return match[1] ? `${match[3]}+${match[1]}.${match[2]}` : match[3]
 }
 
+/** The Windows package quad yy.mmdd.hh.mmss a stamped claim tag (canary, commit or channel) carries:
+ * the same value as scripts/msix-shared.mjs canaryPackageVersionAt and
+ * hermes_cli/update_channel.py stamped_windows_version. Null for any other tag. */
+export function stampedWindowsVersion(tag: string | null | undefined): string | null {
+  const match = /^(?:canary|commit|channel)\.(20\d{2})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z-v\d+\.\d+\.\d+$/.exec(tag || '')
+
+  if (!match) {
+    return null
+  }
+
+  const [year, month, day, hour, minute, second] = match.slice(1).map(Number)
+
+  return `${year % 100}.${month * 100 + day}.${hour}.${minute * 100 + second}`
+}
+
 export interface FeatureFlagInput {
   /** desktop launch flags */
   argv: readonly string[]
