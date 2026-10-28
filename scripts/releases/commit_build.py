@@ -10,7 +10,6 @@ import tomllib
 from datetime import datetime, timezone, UTC
 from pathlib import Path
 
-WORKFLOW = "desktop-bundled-release.yml"
 
 
 def require_commit(value: str) -> str:

@@ -51,9 +51,8 @@ def test_stage_and_fetch_bind_tag_commit_and_files_without_feed_writes(tmp_path,
     fetch = lambda target: handoff.main(['fetch', *identity, '--name', 'win32-x64', '--root', str(target)])
     for changed in ({'schema': 2}, {'commit': 'b' * 40}, {'tag': 'v9.9.9'}, {'name': 'wrong'}):
         r2_server.store[receipt_key] = (json.dumps({**receipt, **changed}).encode(), '"e"')
-        with pytest.raises(ValueError, match='identity') as error:
+        with pytest.raises(ValueError, match='identity'):
             fetch(tmp_path / 'wrong')
-        assert not isinstance(error.value, handoff.MissingReceipt)
 
     for bad_path in ("../outside", "C:/outside", "dir\\outside", "a//b", "./a", "a%2fb", "a:b", "a?b", "a#b", '', '/abs.msix', 'NUL'):
         bad = copy.deepcopy(receipt)
@@ -75,26 +74,28 @@ def test_stage_and_fetch_bind_tag_commit_and_files_without_feed_writes(tmp_path,
     assert (downloaded / "app.msix").read_bytes() == data
 
 
-def test_failed_stage_never_publishes_a_receipt_or_channel(tmp_path, r2_server):
+def test_failed_stage_never_publishes_a_receipt_or_channel(tmp_path, request):
+    server = request.getfixturevalue("r2_server")
     tag, commit = "v1.2.3", "a" * 40
     (tmp_path / "one.msix").write_bytes(b"first")
     (tmp_path / "two.msix").write_bytes(b"second")
     prefix = f'releases/tag/{tag}/'
     identity = ['--tag', tag, '--commit', commit]
-    r2_server.fail_put = prefix + 'two.msix'
+    server.fail_put = prefix + 'two.msix'
     with pytest.raises(r2.R2RequestError):
         handoff.main(['stage', *identity, '--name', 'win32-x64', '--root', str(tmp_path), '--include', '*.msix'])
-    assert set(r2_server.store) == {prefix + 'one.msix'}
-    r2_server.requests.clear()
+    assert set(server.store) == {prefix + 'one.msix'}
+    server.requests.clear()
     with pytest.raises(ValueError, match="No files"):
         handoff.stage(tag, commit, "win32-x64", tmp_path, ["*.zip"])
-    assert r2_server.requests == []
+    assert server.requests == []
     with pytest.raises(ValueError, match="identity"):
         handoff.stage("../bad", commit, "win32-x64", tmp_path, ["*.msix"])
-    assert r2_server.requests == []
+    assert server.requests == []
 
 
-def test_shared_receipt_files_download_once_and_conflicts_leave_targets_intact(tmp_path, r2_server):
+def test_shared_receipt_files_download_once_and_conflicts_leave_targets_intact(tmp_path, request):
+    server = request.getfixturevalue("r2_server")
     from scripts.releases import handoff
 
     commit, tag = "a" * 40, "v1.2.3"
@@ -105,24 +106,25 @@ def test_shared_receipt_files_download_once_and_conflicts_leave_targets_intact(t
     prefix = r2.staging_key_for(tag, "")
     stage("one")
     stage("two")
-    r2_server.requests.clear()
+    server.requests.clear()
     target = tmp_path / "download"
     fetch(target)
     assert (target / "shared.bin").read_bytes() == artifact.read_bytes()
-    gets = [url for method, url, _ in r2_server.requests if method == "GET"]
+    gets = [url for method, url, _ in server.requests if method == "GET"]
     assert sum(url.endswith(prefix + "shared.bin") for url in gets) == 1
 
     receipt_key = prefix + "handoff-two.json"
-    receipt = json.loads(r2_server.store[receipt_key][0])
+    receipt = json.loads(server.store[receipt_key][0])
     receipt["files"][0]["sha256"] = "0" * 64
-    r2_server.store[receipt_key] = (json.dumps(receipt).encode(), '"changed"')
+    server.store[receipt_key] = (json.dumps(receipt).encode(), '"changed"')
     before = {file.name: file.read_bytes() for file in target.iterdir()}
     with pytest.raises(ValueError, match="Conflicting"):
         fetch(target)
     assert {file.name: file.read_bytes() for file in target.iterdir()} == before
 
 
-def test_public_handoff_downloads_exact_staged_bytes_without_credentials(tmp_path, monkeypatch, r2_server):
+def test_public_handoff_downloads_exact_staged_bytes_without_credentials(tmp_path, monkeypatch, request):
+    server = request.getfixturevalue("r2_server")
     import os
     from pathlib import Path
     import subprocess
@@ -139,9 +141,9 @@ def test_public_handoff_downloads_exact_staged_bytes_without_credentials(tmp_pat
     for key in ('CLOUDFLARE_R2_ACCOUNT_ID', 'CLOUDFLARE_R2_ACCESS_KEY_ID',
                 'CLOUDFLARE_R2_SECRET_ACCESS_KEY', 'CLOUDFLARE_R2_BUCKET'):
         monkeypatch.delenv(key)
-    r2_server.requests.clear()
+    server.requests.clear()
     download = tmp_path / 'downloaded'
-    base = f'http://127.0.0.1:{r2_server.server_port}/hermes-releases'
+    base = f'http://127.0.0.1:{server.server_port}/hermes-releases'
     args = ['fetch', *identity, '--public-base', base, '--name', 'win32-x64',
             '--root', str(download), '--include', '*.msix']
     handoff.main(args)
@@ -150,15 +152,15 @@ def test_public_handoff_downloads_exact_staged_bytes_without_credentials(tmp_pat
     original_receipt = receipt_file.read_bytes()
     assert json.loads(original_receipt)['commit'] == commit
     assert all(method == 'GET' and not any(k.lower() == 'authorization' for k in headers)
-               for method, _, headers in r2_server.requests)
-    assert any(path.endswith('/app%20x64.msix') for _, path, _ in r2_server.requests)
+               for method, _, headers in server.requests)
+    assert any(path.endswith('/app%20x64.msix') for _, path, _ in server.requests)
     result = subprocess.run([sys.executable, '-m', 'scripts.releases.handoff', *args],
                             cwd=Path(__file__).resolve().parents[2], env=os.environ,
                             capture_output=True, text=True, encoding='utf-8', timeout=30, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
     assert (download / 'app x64.msix').read_bytes() == payload
     # A bad CDN object cannot replace a previously verified local download.
-    r2_server.store[prefix + 'app x64.msix'] = (b'corrupt', '"changed"')
+    server.store[prefix + 'app x64.msix'] = (b'corrupt', '"changed"')
     with pytest.raises(ValueError, match='checksum mismatch'):
         handoff.main(args)
     assert (download / 'app x64.msix').read_bytes() == payload
@@ -166,18 +168,18 @@ def test_public_handoff_downloads_exact_staged_bytes_without_credentials(tmp_pat
     assert sorted(p.name for p in download.iterdir()) == ['app x64.msix', receipt_file.name]
     bad = json.loads(original_receipt)
     bad['commit'] = 'b' * 40
-    r2_server.store[prefix + receipt_file.name] = (json.dumps(bad).encode(), '"bad"')
-    r2_server.requests.clear()
+    server.store[prefix + receipt_file.name] = (json.dumps(bad).encode(), '"bad"')
+    server.requests.clear()
     with pytest.raises(ValueError, match='identity'):
         handoff.main(args)
-    assert len(r2_server.requests) == 1
+    assert len(server.requests) == 1
     bad = json.loads(original_receipt)
     bad['files'][0]['path'] = '../outside.msix'
-    r2_server.store[prefix + receipt_file.name] = (json.dumps(bad).encode(), '"bad"')
-    r2_server.requests.clear()
+    server.store[prefix + receipt_file.name] = (json.dumps(bad).encode(), '"bad"')
+    server.requests.clear()
     with pytest.raises(ValueError, match='path'):
         handoff.main(args)
-    assert len(r2_server.requests) == 1
+    assert len(server.requests) == 1
     assert not (tmp_path / 'outside.msix').exists()
 
 

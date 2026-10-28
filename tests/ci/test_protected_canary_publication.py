@@ -143,7 +143,8 @@ def native_leg(root, identity, env, platform, arch):
 
 @pytest.mark.parametrize("platform", ["win32", "darwin"])
 @pytest.mark.parametrize("variant,phase", [("bundled", ""), ("bundled", "candidate"), ("light", "")])
-def test_canary_metadata_is_recorded_and_receipt_bound(canary, r2_server, platform, variant, phase):
+def test_canary_metadata_is_recorded_and_receipt_bound(canary, request, platform, variant, phase):
+    server = request.getfixturevalue("r2_server")
     clone, identity, original_env, run = canary
     env = {**original_env, "HERMES_DESKTOP_VARIANT": variant, "RELEASE_PHASE": phase}
     if phase == "candidate":
@@ -155,13 +156,13 @@ def test_canary_metadata_is_recorded_and_receipt_bound(canary, r2_server, platfo
     result = run(script, **env, TARGET=f"{platform}-x64")
     assert result.returncode == 0, result.stdout + result.stderr
     prefix = f"releases/tag/{env['RELEASE_TAG']}/"
-    receipt = json.loads(r2_server.store[prefix + handoff.receipt_name(f"{platform}-x64")][0])
+    receipt = json.loads(server.store[prefix + handoff.receipt_name(f"{platform}-x64")][0])
     metadata_name = f"metadata-{'windows' if platform == 'win32' else 'macos'}-x64.json"
     if variant == "light":
         assert not any(row["path"].startswith("metadata-") for row in receipt["files"])
         return
     entry = next(row for row in receipt["files"] if row["path"] == metadata_name)
-    body = r2_server.store[prefix + metadata_name][0]
+    body = server.store[prefix + metadata_name][0]
     metadata = json.loads(body)
     assert entry["sha256"] == hashlib.sha256(body).hexdigest()
     assert metadata["commit"] == env["RELEASE_COMMIT"] and metadata["tag"] == env["RELEASE_TAG"]
