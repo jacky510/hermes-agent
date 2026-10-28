@@ -9,10 +9,11 @@ import { codesignTeam, channelStampAssertions } from './mac-bundled-manifest.cjs
 
 const identityModule = fileURLToPath(new URL('../../../apps/desktop/product-identity.cjs', import.meta.url))
 
+// A channel build carries its request (identity) and its own claim tag (version, archive).
 function admitChannelRequest(request, commit, tag) {
-  if (tag || request?.commit !== commit) throw new Error('Channel request conflicts with commit or tag')
+  if (tag !== request?.releaseTag || request?.commit !== commit) throw new Error('Channel request conflicts with commit or tag')
   return channelBuildRequest({ ...process.env, HERMES_DESKTOP_VARIANT: 'bundled',
-    HERMES_BUILD_COMMIT: '', HERMES_PAYLOAD_TAG: '', HERMES_PAYLOAD_VERSION: '',
+    HERMES_BUILD_COMMIT: '', HERMES_PAYLOAD_TAG: tag, HERMES_PAYLOAD_VERSION: '',
     _HERMES_CHANNEL_REQUEST_JSON: JSON.stringify(request) })
 }
 
@@ -44,7 +45,7 @@ export function verifyBundleStamp(stamp, { commit, tag = '', platform, channelRe
   if (tag && !releaseVersion(tag)) throw new Error('Invalid release tag')
   const request = channelRequest === null ? null : admitChannelRequest(channelRequest, commit, tag)
   const commitBuild = !request && (!tag || COMMIT_TAG_RE.test(tag))
-  const expected = { commit, tag: request?.receiverCandidate ? request.releaseTag : tag || null, payload: 'bundled', distribution: 'desktop-app', dirty: false,
+  const expected = { commit, tag: tag || null, payload: 'bundled', distribution: 'desktop-app', dirty: false,
     updateMechanism: commitBuild ? 'external' : { darwin: 'electron-updater', win32: 'app-installer' }[platform] }
   if (commitBuild) Object.assign(expected, { source: 'commit-build', branch: null })
   for (const [key, value] of Object.entries(expected)) {
@@ -140,7 +141,7 @@ function main() {
     const raw = fs.readFileSync(values['channel-request'], 'utf8')
     if (!raw) throw new Error('Empty channel request')
     values.channelRequest = channelBuildRequest({ ...process.env, HERMES_DESKTOP_VARIANT: 'bundled',
-      HERMES_BUILD_COMMIT: '', HERMES_PAYLOAD_TAG: '', HERMES_PAYLOAD_VERSION: '', _HERMES_CHANNEL_REQUEST_JSON: raw })
+      HERMES_BUILD_COMMIT: '', HERMES_PAYLOAD_TAG: values.tag || '', HERMES_PAYLOAD_VERSION: '', _HERMES_CHANNEL_REQUEST_JSON: raw })
   }
   const commands = {
     identity: () => bundleIdentity(values.commit, values.tag, values.channelRequest),
