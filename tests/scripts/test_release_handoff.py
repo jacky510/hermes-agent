@@ -10,11 +10,11 @@ from tests.scripts.test_release_r2 import r2_server
 
 
 @pytest.mark.parametrize('tag', ['v1.2.3', 'canary.20260908T232538Z-v1.2.3', 'rc.1-v1.2.3',
-                                 'commit.20260908T232538Z-v1.2.3', 'channel.20260908T232538Z-v1.2.3', None])
+                                 'commit.20260908T232538Z-v1.2.3', 'channel.20260908T232538Z-v1.2.3'])
 def test_stage_and_fetch_bind_tag_commit_and_files_without_feed_writes(tmp_path, monkeypatch, r2_server, tag):
     commit = "a" * 40
-    identity = ['--tag', tag, '--commit', commit] if tag else ['--commit-build', commit]
-    prefix = f'releases/tag/{tag}/' if tag else f'releases/commit/{commit}/'
+    identity = ['--tag', tag, '--commit', commit]
+    prefix = f'releases/tag/{tag}/'
     monkeypatch.setenv('GITHUB_SHA', 'c' * 40)
     root = tmp_path / "built"
     root.mkdir()
@@ -29,8 +29,8 @@ def test_stage_and_fetch_bind_tag_commit_and_files_without_feed_writes(tmp_path,
                   "--root", str(root), "--include", "*.msix", "--include", "metadata-*.json", "--include", "apt/**/*"])
     receipt_key = prefix + 'handoff-win32-x64.json'
     receipt = json.loads(r2_server.store[receipt_key][0])
-    assert receipt['schema'] == (1 if tag else 2) and receipt['commit'] == commit
-    assert receipt['tag'] == tag if tag else 'tag' not in receipt
+    assert receipt['schema'] == 1 and receipt['commit'] == commit
+    assert receipt['tag'] == tag
     assert {row["path"] for row in receipt["files"]} == {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
     assert all(key.startswith(prefix) for key in r2_server.store)
     puts = [path for method, path, _ in r2_server.requests if method == "PUT"]
@@ -43,13 +43,13 @@ def test_stage_and_fetch_bind_tag_commit_and_files_without_feed_writes(tmp_path,
     assert (downloaded / "app.msix").read_bytes() == data
     assert (downloaded / "Store-app.msix").read_bytes() == b"store transport fixture"
     assert not (downloaded / "metadata-windows-x64.json").exists()
-    handoff.main(['stage', *identity, *([] if tag else ['--commit', commit]), '--name', 'win32-x64',
+    handoff.main(['stage', *identity, '--name', 'win32-x64',
                   '--root', str(root), '--include', '*.msix', '--include', 'metadata-*.json', '--include', 'apt/**/*'])
     handoff.main(['fetch', *identity, '--name', 'win32-x64', '--root', str(downloaded), '--include', 'apt/*'])
     assert (downloaded / nested.relative_to(root)).read_bytes() == nested.read_bytes()
 
     fetch = lambda target: handoff.main(['fetch', *identity, '--name', 'win32-x64', '--root', str(target)])
-    for changed in ({'schema': 2 if tag else 1}, {'commit': 'b' * 40}, {'tag': 'v9.9.9'}, {'name': 'wrong'}):
+    for changed in ({'schema': 2}, {'commit': 'b' * 40}, {'tag': 'v9.9.9'}, {'name': 'wrong'}):
         r2_server.store[receipt_key] = (json.dumps({**receipt, **changed}).encode(), '"e"')
         with pytest.raises(ValueError, match='identity') as error:
             fetch(tmp_path / 'wrong')
@@ -75,13 +75,12 @@ def test_stage_and_fetch_bind_tag_commit_and_files_without_feed_writes(tmp_path,
     assert (downloaded / "app.msix").read_bytes() == data
 
 
-@pytest.mark.parametrize('commit_only', [False, True])
-def test_failed_stage_never_publishes_a_receipt_or_channel(tmp_path, r2_server, commit_only):
+def test_failed_stage_never_publishes_a_receipt_or_channel(tmp_path, r2_server):
     tag, commit = "v1.2.3", "a" * 40
     (tmp_path / "one.msix").write_bytes(b"first")
     (tmp_path / "two.msix").write_bytes(b"second")
-    prefix = f'releases/commit/{commit}/' if commit_only else f'releases/tag/{tag}/'
-    identity = ['--commit-build', commit] if commit_only else ['--tag', tag, '--commit', commit]
+    prefix = f'releases/tag/{tag}/'
+    identity = ['--tag', tag, '--commit', commit]
     r2_server.fail_put = prefix + 'two.msix'
     with pytest.raises(r2.R2RequestError):
         handoff.main(['stage', *identity, '--name', 'win32-x64', '--root', str(tmp_path), '--include', '*.msix'])
@@ -95,21 +94,15 @@ def test_failed_stage_never_publishes_a_receipt_or_channel(tmp_path, r2_server, 
     assert r2_server.requests == []
 
 
-@pytest.mark.parametrize("commit_only", [False, True])
-def test_shared_receipt_files_download_once_and_conflicts_leave_targets_intact(tmp_path, r2_server, commit_only):
+def test_shared_receipt_files_download_once_and_conflicts_leave_targets_intact(tmp_path, r2_server):
     from scripts.releases import handoff
 
     commit, tag = "a" * 40, "v1.2.3"
     artifact = tmp_path / "shared.bin"
     artifact.write_bytes(b"same shared bytes")
-    if commit_only:
-        stage = lambda name: handoff.stage_commit_build(commit, name, tmp_path, ["*.bin"])
-        fetch = lambda target: handoff.fetch_commit_build(commit, ["one", "two"], target)
-        prefix = r2.commit_prefix_for(commit)
-    else:
-        stage = lambda name: handoff.stage(tag, commit, name, tmp_path, ["*.bin"])
-        fetch = lambda target: handoff.fetch(tag, commit, ["one", "two"], target)
-        prefix = r2.staging_key_for(tag, "")
+    stage = lambda name: handoff.stage(tag, commit, name, tmp_path, ["*.bin"])
+    fetch = lambda target: handoff.fetch(tag, commit, ["one", "two"], target)
+    prefix = r2.staging_key_for(tag, "")
     stage("one")
     stage("two")
     r2_server.requests.clear()
@@ -129,43 +122,15 @@ def test_shared_receipt_files_download_once_and_conflicts_leave_targets_intact(t
     assert {file.name: file.read_bytes() for file in target.iterdir()} == before
 
 
-def test_commit_identity_and_simultaneous_namespaces(tmp_path, r2_server):
-    commit = 'a' * 40
-    for bad in ('abc', commit[:39], 'g' * 40, '', None, ' ' * 40):
-        with pytest.raises(ValueError):
-            handoff.validate_commit_identity(bad, 'win32-x64')
-    with pytest.raises(ValueError):
-        handoff.validate_commit_identity(commit, 'Bad Name')
-    (tmp_path / 'app.msix').write_bytes(b'commit bytes')
-    args = ['stage', '--commit-build', commit, '--name', 'win32-x64', '--root', str(tmp_path), '--include', '*.msix']
-    for conflict in (['--commit', 'b' * 40], ['--tag', 'v1.2.3']):
-        with pytest.raises(SystemExit):
-            handoff.main([*args, *conflict])
-    assert r2_server.requests == []
-    handoff.main(args)
-    (tmp_path / 'app.msix').write_bytes(b'tag bytes')
-    handoff.stage('v1.2.3', commit, 'win32-x64', tmp_path, ['*.msix'])
-    for identity, data in ((['--commit-build', commit], b'commit bytes'),
-                           (['--tag', 'v1.2.3', '--commit', commit], b'tag bytes')):
-        handoff.main(['fetch', *identity, '--name', 'win32-x64', '--root', str(tmp_path / 'out')])
-        assert (tmp_path / 'out/app.msix').read_bytes() == data
-    with pytest.raises(handoff.MissingReceipt):
-        handoff.read_commit_receipt('b' * 40, 'win32-x64')
-    r2_server.store[f'releases/commit/{commit}/handoff-win32-x64.json'] = (b'not-json', '"e"')
-    with pytest.raises(json.JSONDecodeError):
-        handoff.read_commit_receipt(commit, 'win32-x64')
-
-
-@pytest.mark.parametrize('tag', ['v1.2.3', None])
-def test_public_handoff_downloads_exact_staged_bytes_without_credentials(tmp_path, monkeypatch, r2_server, tag):
+def test_public_handoff_downloads_exact_staged_bytes_without_credentials(tmp_path, monkeypatch, r2_server):
     import os
     from pathlib import Path
     import subprocess
     import sys
 
-    commit = 'a' * 40
-    identity = ['--tag', tag, '--commit', commit] if tag else ['--commit-build', commit]
-    prefix = f'releases/tag/{tag}/' if tag else f'releases/commit/{commit}/'
+    commit, tag = 'a' * 40, 'v1.2.3'
+    identity = ['--tag', tag, '--commit', commit]
+    prefix = f'releases/tag/{tag}/'
     built = tmp_path / 'built'
     built.mkdir()
     payload = b'public artifact transport fixture\n' * 90000
@@ -221,7 +186,7 @@ def test_public_handoff_rejects_unsafe_origins_paths_and_redirects(tmp_path, r2_
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     commit = 'a' * 40
-    args = ['fetch', '--commit-build', commit, '--name', 'win32-x64', '--root', str(tmp_path / 'out')]
+    args = ['fetch', '--tag', 'v1.2.3', '--commit', commit, '--name', 'win32-x64', '--root', str(tmp_path / 'out')]
     for base in ('http://cdn.example', 'https://user:password@cdn.example', 'file:///tmp',
                  'https://cdn.example/?token=private', 'https://cdn.example/#fragment',
                  'https://cdn.example/../escape', 'https://cdn.example/%2e%2e/escape'):
@@ -256,12 +221,11 @@ def test_public_handoff_rejects_unsafe_origins_paths_and_redirects(tmp_path, r2_
 
 def test_a_commit_claim_stages_under_its_claim_despite_its_commit_identity_env(tmp_path, monkeypatch):
     # A commit claim's legs export HERMES_BUILD_COMMIT (the Commit<sha7> identity) beside the claim
-    # tag; the handoff CLI must stage under the claim archive, never fall into tagless commit mode.
+    # tag; the handoff CLI stages under the claim archive (there is no tagless commit mode).
     commit, tag = "a" * 40, "commit.20261026T180000Z-v1.2.3"
     monkeypatch.setenv("HERMES_BUILD_COMMIT", commit)
     calls = []
     monkeypatch.setattr(handoff, "stage", lambda *args: calls.append(("tag", *args)))
-    monkeypatch.setattr(handoff, "stage_commit_build", lambda *args: calls.append(("commit", *args)))
     handoff.main(["stage", "--tag", tag, "--commit", commit, "--name", "win32-x64",
                   "--root", str(tmp_path), "--include", "*.msix"])
     assert calls == [("tag", tag, commit, "win32-x64", tmp_path, ["*.msix"])]

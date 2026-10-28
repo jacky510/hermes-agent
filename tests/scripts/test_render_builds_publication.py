@@ -38,7 +38,7 @@ def release_body(monkeypatch):
 
 
 @pytest.mark.parametrize('tag', ['v1.2.3', 'canary.20260818T101010Z-v1.2.3'])
-def test_tag_publication_pending_rerun_stale_and_dry_run(monkeypatch, r2_server, release_body, tag):
+def test_tag_publication_rerun_stale_and_dry_run(monkeypatch, r2_server, release_body, tag):
     base = f'http://127.0.0.1:{r2_server.server_port}/hermes-releases'
     from hermes_cli.update_channel import release_version
 
@@ -60,13 +60,9 @@ def test_tag_publication_pending_rerun_stale_and_dry_run(monkeypatch, r2_server,
         monkeypatch.setattr(sys, 'argv', [*args, *extra])
         assert rbt.main() == 0
 
-    for run in ('1', '2'):
-        render('--pending-run-url', f'https://github.example/runs/{run}')
-    assert 'runs/1' not in release_body['body'] and release_body['body'].count('runs/2') == 1
-    assert not any(method == 'PUT' for method, _, _ in r2_server.requests)
     render()
     body = release_body['body']
-    assert 'runs/2' not in body and body.count('## Downloads') == 1
+    assert body.count('## Downloads') == 1
     assert body.count(rbt.MARKER) == body.count(rbt.END_MARKER) == 1
     expected = {rbt.r2.public_url_for(base, prefix + name) for name in visible}
     assert set(re.findall(r'\]\((http[^)]+)\)', body)) == expected

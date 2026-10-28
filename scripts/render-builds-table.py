@@ -2,8 +2,9 @@
 """Render the release download tables into <!-- HERMES_BUILDS_TABLE -->, and
 the same rows as standalone pages in the bucket.
 
-Runs after the build jobs of desktop-bundled-release.yml finish, including
-failed legs, and edits the GitHub release body in place. The tables
+Stable Release runs it for every claim once the candidate's legs finish
+(including failed legs), and its publication edits the GitHub release body
+in place. The tables
 are built from the bucket's ACTUAL object names (scripts/releases/r2.py
 list --prefix releases/tag/<tag>/), filtered to the tag's exact version —
 a missing artifact shows up as a missing row, never a dead link. The
@@ -17,20 +18,12 @@ so a build can be read straight from the download origin:
   releases/tag/<tag>/index.html     every admitted tag, including failed builds
   releases/<channel>/index.html     latest successful stable or canary build;
                                     failed prerequisites leave it unchanged
-  releases/commit/<sha>/index.html  commit mode: every expected binary of
-                                    one commit build, built or not
 
 Tables: Hermes Desktop (bundled) and Hermes Light, one row per (OS,
 arch). Feed manifests (latest*/light*/canary*.yml), blockmaps and mac .zip
 (an electron-updater delta target, not a user download) stay out of the
 tables on purpose; they still live in the bucket for the updater to
 consume.
-
-With --pending-run-url, renders a "builds in progress" link to the
-workflow run instead of the tables. The builds-pending job runs this
-mode as the first job of the run, so the draft body points at the live
-run while the matrix builds. The link block keeps the marker wrapper,
-so the final render replaces it.
 
 Usage: render-builds-table.py --tag vX.Y.Z [--repo owner/repo] [--r2-base-url URL] [--dry-run]
 Idempotent: re-running replaces the previously rendered block (the

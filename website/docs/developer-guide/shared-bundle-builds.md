@@ -344,16 +344,12 @@ The signature-result cache is separate. Native wheel partitions depend on
 observed compiler/SDK/OpenSSL identity; incomplete identity deliberately forgoes
 warm reuse. This is not a fully pinned host SDK.
 
-Cache keys are lookup hints, not authorization. Native builders have separate
-release and commit execution jobs with literal `cache-mode: write` and
-`cache-mode: read`, respectively. GitHub enforces these permissions on scoped
-cache tokens, so commit builds cannot save caches even from their own scripts.
-Both branches share their matrix, environment, and steps through YAML anchors.
-The original `build-win32` and `build-darwin` IDs aggregate the branches: after
-successful validation and input archiving, exactly the selected branch must
-succeed and the other must be skipped. A failed, cancelled, or unexpectedly
-skipped selected build fails the aggregate; it cannot permit publication.
-Existing publication dependencies keep using those IDs. A skipped save or a
+Cache keys are lookup hints, not authorization. Each native target has one
+build job (`cache-mode: write`), which every claim kind runs. Only reviewed
+claims (stable, canary) run its save step; commit and channel claims build
+unreviewed commits, so they restore but never save. That guard is the save
+step's own `if`, not a scoped token: what keeps a bad snapshot out of a build is
+preparation, which admits every restored input before use. A skipped save or a
 different key prefix alone cannot prevent a script from poisoning a writer
 namespace.
 Default-branch canary dispatch retains default-branch cache scope; changing a

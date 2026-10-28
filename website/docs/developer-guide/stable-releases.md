@@ -297,9 +297,9 @@ records carry an optional `archiveRef` naming the attempt ref; `releaseTag`
 stays `vX.Y.Z` and the protected prefix falls back to it when `archiveRef` is
 absent.
 
-The desktop workflow's optional `termux_upgrade_from_tag` input names an exact
-published release with a Termux R2 handoff. Explicit non-publishing desktop builds
-retain no downloadable job artifacts.
+`desktop-bundled-release.yml` has no dispatch of its own: Stable Release calls
+it for a claim's candidate or publish phase, and every build it runs stages under
+that claim's archive. It retains no downloadable job artifacts.
 
 The desktop workflow takes a `jobs` input with the groups `darwin-arm64`,
 `darwin-x64`, `win32-arm64`, `win32-x64`, `win32-bundle`, `linux-x64`,
@@ -364,9 +364,9 @@ protected canary head receipts that tag.
 The protected publication controller verifies that exact annotated tag object
 before it flips the GitHub prerelease from draft to public, reads both states back,
 and only then advances the R2 head.
-Only Stable Release's `publish-canary` job publishes a canary. A direct dispatch of
-`desktop-bundled-release.yml` refuses a release tag, and the controller refuses
-any other workflow as a canary publisher. The canary Docker aliases (`:canary`,
+Only Stable Release's `publish-canary` job publishes a canary;
+`desktop-bundled-release.yml` cannot be dispatched directly, and the controller
+refuses any other workflow as a canary publisher. The canary Docker aliases (`:canary`,
 `:canary-desktop`) move only after `publish-canary` succeeds, so they follow the
 claim's green policy and lanes like every other canary channel. The canary's
 Termux packages go to `hermes-canary` under a pool prefix named by its tag, just
