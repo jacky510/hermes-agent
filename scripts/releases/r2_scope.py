@@ -16,9 +16,11 @@ def bucket_url(base: str, bucket: str) -> str:
 
 
 def object_url(base: str, bucket: str, key: str) -> str:
-    from scripts.releases.r2 import encode_key_path
+    """Every signed object call goes through here, so every key is validated here: no absolute,
+    dot-segment, empty-segment or encoded escape reaches the bucket."""
+    from scripts.releases.r2 import encode_key_path, relative_artifact_path
 
-    return f"{bucket_url(base, bucket)}/{encode_key_path(key)}"
+    return f"{bucket_url(base, bucket)}/{encode_key_path(relative_artifact_path(key))}"
 
 
 def channel_public_base(explicit: str | None = None) -> str:
