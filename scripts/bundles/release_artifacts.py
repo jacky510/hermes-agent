@@ -35,10 +35,10 @@ def release_channel(tag: str) -> str:
 
     The tag decides, never a caller flag, so a stable candidate can never write a canary feed or
     the reverse (scripts/termux/deb_version.py and scripts/releases/r2.py key on it the same way)."""
-    from hermes_cli.update_channel import is_canary_tag, is_commit_tag
+    from hermes_cli.update_channel import is_canary_tag, is_preview_tag
 
-    if is_commit_tag(tag):
-        raise ValueError(f"Commit builds publish to no release channel: {tag!r}")
+    if is_preview_tag(tag):
+        raise ValueError(f"Commit and channel builds publish to no release channel: {tag!r}")
     return "canary" if is_canary_tag(tag) else "stable"
 
 

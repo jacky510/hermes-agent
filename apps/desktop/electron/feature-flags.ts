@@ -15,10 +15,11 @@ export function isCanaryTag(tag: string | null | undefined): boolean {
 }
 
 /** The version a release identity tag carries: X.Y.Z, or X.Y.Z+canary.<stamp> /
- * X.Y.Z+commit.<stamp> for a canary or commit build (hermes_cli/update_channel.py release_version).
- * Never strip a leading `v`: canary and commit tags start with their kind. */
+ * X.Y.Z+commit.<stamp> / X.Y.Z+channel.<stamp> for a canary, commit or channel claim
+ * (hermes_cli/update_channel.py release_version). Never strip a leading `v`: prefix tags start with
+ * their kind. */
 export function releaseTagVersion(tag: string | null | undefined): string | null {
-  const match = /^(?:(canary|commit)\.(20\d{6}T\d{6}Z)-)?v(\d+\.\d+\.\d+)$/.exec(tag || '')
+  const match = /^(?:(canary|commit|channel)\.(20\d{6}T\d{6}Z)-)?v(\d+\.\d+\.\d+)$/.exec(tag || '')
 
   if (!match) {
     return null

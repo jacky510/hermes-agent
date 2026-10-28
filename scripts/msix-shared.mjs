@@ -79,6 +79,9 @@ const VERSION_CORE = '(?:0|[1-9]\\d{0,2})\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)'
 export const CANARY_TAG_RE = new RegExp(`^canary\\.(20\\d{6}T\\d{6}Z)-v(${VERSION_CORE})$`)
 // commit.<stamp>-v<core> (update_channel._COMMIT_TAG_RE): a commit build's claim tag, same groups.
 export const COMMIT_TAG_RE = new RegExp(`^commit\\.(20\\d{6}T\\d{6}Z)-v(${VERSION_CORE})$`)
+// channel.<stamp>-v<core> (update_channel._CHANNEL_TAG_RE): a channel build's claim tag. Its packages
+// take their identity and 0.0.<sequence> versions from the channel request, never from this tag.
+export const CHANNEL_TAG_RE = new RegExp(`^channel\\.(20\\d{6}T\\d{6}Z)-v(${VERSION_CORE})$`)
 export const STABLE_TAG_RE = new RegExp(`^v${VERSION_CORE}$`)
 
 /** The version a release identity tag carries (update_channel.release_version): X.Y.Z, or
@@ -92,7 +95,9 @@ export function releaseVersion(tag) {
   const canary = CANARY_TAG_RE.exec(value)
   if (canary) return `${canary[2]}+canary.${canary[1]}`
   const commit = COMMIT_TAG_RE.exec(value)
-  return commit ? `${commit[2]}+commit.${commit[1]}` : null
+  if (commit) return `${commit[2]}+commit.${commit[1]}`
+  const channel = CHANNEL_TAG_RE.exec(value)
+  return channel ? `${channel[2]}+channel.${channel[1]}` : null
 }
 
 /** releaseVersion for a tag already admitted as a release tag; throws on anything else.
