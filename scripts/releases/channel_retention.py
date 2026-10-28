@@ -43,15 +43,19 @@ class PreviewRetention:
             for field in ('head', 'lastHead', 'destinationHead'):
                 head = record.get(field)
                 if head is not None:
-                    claims.add(self.head_request(head)['releaseTag'])
+                    owner = record
+                    if field == 'destinationHead':
+                        name = record['destination']
+                        owner = validate_record(self.read_json(channel_key(name)), name=name,
+                                                repository=record['repository'])
+                    claims.add(self.head_request(head, owner)['releaseTag'])
         return claims
 
-    def head_request(self, head: dict) -> dict:
+    def head_request(self, head: dict, owner: dict) -> dict:
         request = self.request(head['buildId'])
         manifest = self.read_json(head['manifestKey'])
         if hashlib.sha256(canonical_json(manifest)).hexdigest() != head['sha256']:
             raise ChannelError('Live head manifest digest mismatch')
-        owner = validate_record(self.read_json(channel_key(request['channel'])))
         validate_manifest(manifest, {**owner, 'head': head}, request['publicBase'])
         if manifest['request'] != request:
             raise ChannelError('Live head differs from its immutable request')

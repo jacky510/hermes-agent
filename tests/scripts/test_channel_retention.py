@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from hermes_cli.release_channels import build_prefix, canonical_json
+from hermes_cli.release_channels import build_prefix, canonical_json, channel_key
 from scripts.releases import r2
 from scripts.releases.channels import ChannelPublisher, R2ChannelStore
 from tests.scripts.test_release_channels import put_build
@@ -125,3 +125,37 @@ def test_retention_can_resume_after_an_interrupted_descriptor_deletion(retained_
     monkeypatch.setattr(r2, 'signed_request', signed_request)
     r2.prune(14, now_epoch=NOW)
     assert not doomed.intersection(server.store)
+
+
+@pytest.mark.parametrize('field', ['head', 'lastHead', 'destinationHead'])
+def test_retention_binds_each_live_head_to_its_declared_channel(retained_channels, field):
+    server, pub, (_old, head, _fresh) = retained_channels
+    pub.create('other')
+    other = pub.allocate_claim('other', 'channel.20260903T120000Z-v1.2.3', 'b' * 40, '1.2.3')
+    seed_build(server, other)
+    foreign = pub.promote(other['buildId'])['head']
+    if field != 'head':
+        stable = pub.allocate_protected('stable', 'c' * 40, '2.0.0', release_tag='v2.0.0',
+                                        version='2.0.0', windows_version='2.0.0.0',
+                                        identity=head['identity'], policy='stable-release',
+                                        release_gate=lambda request: True)
+        seed_build(server, stable)
+        pub.promote_protected(stable['buildId'], policy='stable-release', release_gate=lambda request: True)
+        pub.retire('review', 'stable', '2.0.0')
+        # Valid retirement pins remain live before testing the corrupt cross-channel reference.
+        from scripts.releases.channel_retention import PreviewRetention
+        import json
+        live = PreviewRetention(lambda key: json.loads(server.store[key][0])).live_claims(list(server.store))
+        assert {head['releaseTag'], stable['releaseTag']} <= live
+    record = pub._read('review')[0]
+    record[field] = foreign
+    if field == 'lastHead':
+        record['head'] = foreign  # Keep the retired record structurally valid; only ownership is wrong.
+    server.store[channel_key('review')] = (canonical_json(record), '"corrupt-owner"')
+    before = dict(server.store)
+    server.requests.clear()
+    message = 'Invalid release tag' if field == 'destinationHead' else 'identity mismatch'
+    with pytest.raises(RuntimeError, match=message + '.*refusing to prune'):
+        r2.prune(14, now_epoch=NOW)
+    assert server.store == before
+    assert not any(method == 'DELETE' for method, _path, _headers in server.requests)
