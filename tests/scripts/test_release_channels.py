@@ -34,6 +34,17 @@ def object_server():
         def log_message(self, *args):
             pass
 
+        def do_HEAD(self):
+            key = urlsplit(self.path).path.removeprefix("/bucket/")
+            with lock:
+                requests.append(("HEAD", key))
+                body = objects.get(key)
+                self.send_response(200 if body is not None else 404)
+                if body is not None:
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("ETag", '"' + hashlib.sha256(body).hexdigest() + '"')
+                self.end_headers()
+
         def do_GET(self):
             parsed = urlsplit(self.path)
             query = parse_qs(parsed.query)
