@@ -22,6 +22,8 @@ export interface ChannelBuild {
   repository: string
   commit: string
   sourceVersion: string
+  /** The claim (channel., canary.) or release tag whose version and quad the packages carry. */
+  releaseTag?: string
   version: string
   windowsVersion: string
   identity: ChannelIdentity
@@ -32,7 +34,6 @@ export interface ChannelBuild {
 export interface ChannelRequest extends ChannelBuild {
   schema: 1
   controllerCommit?: string
-  releaseTag?: string
   /** Attempt ref naming the immutable archive; only the releases/tag/ prefix reads it. */
   archiveRef?: string
 }
