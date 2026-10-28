@@ -13,6 +13,7 @@ from hermes_cli.release_channels import (
     validate_name, validate_record, validate_repository, validate_request, validate_manifest, require_sha256,
 )
 from scripts.releases import r2
+from scripts.releases.r2_scope import bucket_url, object_url
 
 
 BRANDINGS = ("preview", "stable")
@@ -27,13 +28,11 @@ class PublicVisibilityError(ChannelError):
 
 
 class R2ChannelStore:
-    def __init__(self, creds: dict, base: str, bucket: str, *, scope=None):
-        from scripts.releases.r2_scope import R2Scope
+    def __init__(self, creds: dict, base: str, bucket: str):
         self.creds, self.base, self.bucket = creds, base.rstrip("/"), bucket
-        self.scope = R2Scope.configured() if scope is None else scope
 
     def get(self, key: str) -> tuple[bytes, str] | None:
-        url = self.scope.object_url(self.base, self.bucket, artifact_key(key))
+        url = object_url(self.base, self.bucket, artifact_key(key))
         try:
             response = r2.signed_request("GET", url, creds=self.creds, now=r2.amz_timestamp())
         except r2.R2RequestError as exc:
@@ -49,7 +48,7 @@ class R2ChannelStore:
         return body, etag
 
     def put(self, key: str, body: bytes, etag: str | None = None) -> None:
-        url = self.scope.object_url(self.base, self.bucket, artifact_key(key))
+        url = object_url(self.base, self.bucket, artifact_key(key))
         condition = {"If-Match": etag} if etag is not None else {"If-None-Match": "*"}
         condition["Cache-Control"] = r2.cache_control_for(key) or "no-store"
         try:
@@ -61,7 +60,7 @@ class R2ChannelStore:
             current = self.get(key)
             if current is not None and current[0] == body:
                 from scripts.releases.upload_summary import note
-                note(self.scope.key(key))
+                note(key)
                 return
             if isinstance(exc, r2.R2RequestError) and exc.status == 412:
                 raise ChannelConflict(f"Channel write conflict: {key}") from exc
@@ -70,20 +69,19 @@ class R2ChannelStore:
         if current is None or current[0] != body:
             raise ChannelConflict(f"Channel changed before authenticated readback: {key}")
         from scripts.releases.upload_summary import note
-        note(self.scope.key(key))
+        note(key)
 
     def keys(self, prefix: str) -> list[str]:
         keys, seen = [], set()
-        prefix = self.scope.listing_prefix(prefix)
         token = None
         while True:
             params = {"list-type": "2", "max-keys": "1000", "prefix": prefix}
             if token is not None:
                 params["continuation-token"] = token
-            url = f"{self.scope.bucket_url(self.base, self.bucket)}?{r2.canonical_query(params)}"
+            url = f"{bucket_url(self.base, self.bucket)}?{r2.canonical_query(params)}"
             response = r2.signed_request("GET", url, creds=self.creds, now=r2.amz_timestamp())
             page = r2.parse_list_xml(response.text())
-            keys.extend(self.scope.logical_key(key) for key in page["keys"])
+            keys.extend(page["keys"])
             if not page["truncated"]:
                 return keys
             token = page["nextToken"]

@@ -43,11 +43,35 @@ def admit_request(admitted: dict, env: dict) -> dict[str, str]:
     """Allocate (or find again) the admitted channel claim's request; the admit job's outputs."""
     publisher = _publisher(env)
     publisher.create(admitted["channel"], admitted["branding"])
+    before = publisher._read(admitted["channel"])
     request = publisher.allocate_claim(admitted["channel"], admitted["claim_tag"], admitted["commit"],
                                        admitted["version"].split("+", 1)[0], admitted["bundle_env"],
                                        env.get("GITHUB_SHA"))
+    probe_cas(publisher, admitted["channel"], before, request)
     return {"channel-build": request["buildId"],
             "channel-request-sha256": hashlib.sha256(canonical_json(request)).hexdigest()}
+
+
+def probe_cas(publisher, name: str, before: tuple[dict, str] | None, request: dict) -> None:
+    """The CAS/CDN probe, on the real channel: when this admission advanced the record, R2 must
+    refuse the old record under its old ETag, and the public origin must already show the
+    allocation. A rerun that found its allocation (nothing advanced) has nothing stale to replay."""
+    from hermes_cli.release_channels import channel_key
+    from scripts.releases.channels import ChannelConflict
+
+    after = publisher._read(name)
+    if before is None or after is None:
+        raise ChannelError("Channel record vanished around allocation")
+    if after[1] == before[1]:
+        return
+    try:
+        publisher.store.put(channel_key(name), canonical_json(before[0]), before[1])
+    except ChannelConflict:
+        pass
+    else:
+        raise ChannelError("R2 accepted a stale conditional channel write")
+    if publisher.reader.resolve(name).terminal["nextSequence"] <= request["sequence"]:
+        raise ChannelError("The public channel record does not show this allocation")
 
 
 def read_admitted_request(tag: str, public_base: str, repository: str) -> tuple[dict, str]:

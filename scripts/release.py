@@ -689,7 +689,8 @@ def main():
                              "nowhere; its builds page is releases/tag/<claim>/index.html. Takes "
                              "--only/--with/--without (starting from the stable default minus "
                              "upgrade, install-e2e and windows-store) and --[no-]require-green. Add "
-                             "--channel NAME to publish into an updatable R2 channel instead.")
+                             "--channel NAME to claim channel.<stamp>-v<version> instead: the same "
+                             "pipeline (minus upgrade and windows-store) then advances that R2 channel.")
     parser.add_argument("--bundle-env", action="append", default=[], metavar="NAME=VALUE",
                         help="Bake a non-secret environment default into a commit desktop bundle. "
                              "Repeat for multiple variables. Runtime environment values win.")
@@ -768,9 +769,7 @@ def main():
             args.only or args.with_lanes or args.without_lanes or not args.require_green):
         parser.error("--only/--with/--without/--no-require-green need --canary, --build-commit "
                      "or the release command")
-    if validate_arguments(parser, args):
-        if args.only or args.with_lanes or args.without_lanes or not args.require_green:
-            parser.error("channel builds do not take --only/--with/--without/--no-require-green yet")
+    if validate_arguments(parser, args) and not args.channel:
         cmd_channel(args)
         return
     if (args.bundle_env or args.bundle_unset) and args.build_commit is None:
