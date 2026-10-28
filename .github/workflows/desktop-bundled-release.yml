@@ -994,6 +994,8 @@ jobs:
           MATRIX_LABEL="${{ matrix.target.label }}"
           arch="${MATRIX_LABEL##*-}"
           channel="${{ needs.validate.outputs.channel }}"
+          # Preview requests configure electron-builder's neutral latest feed, not the policy name.
+          if [ "$channel" = channel ]; then channel=latest; fi
           f="apps/desktop/release/${channel}-mac.yml"
           test -s "$f"
           mv "$f" "apps/desktop/release/${arch}-${channel}-mac.yml"
