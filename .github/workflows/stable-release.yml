@@ -807,7 +807,7 @@ jobs:
         with:
           cache-python: false
       - name: Promote the accepted candidate to the channel head
-        run: python -m scripts.releases.channel_claims publish
+        run: python -m scripts.ci.python_packages ruamel.yaml==0.18.17 -- -m scripts.releases.channel_claims publish
       - name: Render the builds page from the accepted candidate
         # Presentation: the channel head already moved.
         continue-on-error: true

@@ -175,7 +175,8 @@ def test_stable_release_admits_allocates_and_publishes_channel_claims():
                               for job in candidates)
     publish = jobs["publish-channel"]
     assert "fromJSON(needs.admit.outputs.jobs)['publish-channel']" in publish["if"]
-    assert any(step.get("run") == "python -m scripts.releases.channel_claims publish" for step in publish["steps"])
+    assert any(step.get("run", "").endswith("-m scripts.releases.channel_claims publish")
+               for step in publish["steps"])
     assert "publish-channel" in jobs["publication"]["needs"]
 
 
