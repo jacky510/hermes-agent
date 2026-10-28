@@ -86,6 +86,30 @@ def validate_channel_request(value: dict) -> dict:
     return deepcopy(value)
 
 
+def _channel_selection(request: dict, variant: str, tag: str | None, commit: str | None,
+                       bundle_env: dict) -> tuple[dict, str | None, dict]:
+    """A channel request with what it may be built beside: its own claim tag (which names the commit)
+    or, tagless, its own commit; its bundle defaults are the build's."""
+    request = validate_channel_request(request)
+    if variant != "bundled":
+        raise ValueError("channel builds currently support only the bundled variant")
+    if tag not in (None, request["releaseTag"]) or commit not in (None, request["commit"]):
+        raise ValueError("channel request conflicts with tag or commit selection")
+    if bundle_env and bundle_env != request["bundleEnv"]:
+        raise ValueError("bundle defaults conflict with channel request")
+    return request, (request["commit"] if tag is None else None), request["bundleEnv"]
+
+
+def _channel_version(request: dict, tag: str | None, commit: str, version: str) -> str:
+    """The request's package version, once the checkout agrees with it: tagged, the claim's commit
+    and version are the request's; tagless, the project version is its source version."""
+    if tag is not None and (commit != request["commit"] or version != request["version"]):
+        raise ValueError("channel request differs from its claim's commit or version")
+    if tag is None and version != request["sourceVersion"]:
+        raise ValueError("channel sourceVersion differs from checkout project version")
+    return request["version"]
+
+
 @dataclass(frozen=True)
 class BuildRequest:
     source: Path
@@ -111,18 +135,8 @@ class BuildRequest:
         from scripts.termux.deb_version import channel_for_tag
 
         if channel_request is not None:
-            channel_request = validate_channel_request(channel_request)
-            if variant != "bundled":
-                raise ValueError("channel builds currently support only the bundled variant")
-            if tag not in (None, channel_request["releaseTag"]) or commit not in (None, channel_request["commit"]):
-                raise ValueError("channel request conflicts with tag or commit selection")
-            if bundle_env and bundle_env != channel_request["bundleEnv"]:
-                raise ValueError("bundle defaults conflict with channel request")
-            # A channel claim's candidate builds its claim tag (which names the commit); otherwise the
-            # request's own commit is the build source.
-            if tag is None:
-                commit = channel_request["commit"]
-            bundle_env = channel_request["bundleEnv"]
+            channel_request, commit, bundle_env = _channel_selection(channel_request, variant, tag, commit,
+                                                                     bundle_env)
         # A canary builds the Store package as stable does (it runs every lane); it never submits it.
         if variant == "store" and (commit or not tag or channel_for_tag(tag) not in ("stable", "canary")):
             raise ValueError("Store packaging requires a stable release tag")
@@ -153,9 +167,6 @@ class BuildRequest:
             version = release_version(source, tag)
             commit = require_commit(release_commit) if release_commit else \
                 git(source, "rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}")
-        if channel_request is not None and tag is not None and (
-                commit != channel_request["commit"] or version != channel_request["version"]):
-            raise ValueError("channel request differs from its claim's commit or version")
         release_epoch = None
         if tag:
             from hermes_cli.update_channel import claim_stamp
@@ -183,11 +194,7 @@ class BuildRequest:
                 release_epoch = int(tagger.group(1))
         require_source(source, commit)
         if channel_request is not None:
-            # Tagged, the claim already bound the version (and the request binds its claim's core to
-            # sourceVersion); tagless, the checkout's project version must be the source version.
-            if tag is None and version != channel_request["sourceVersion"]:
-                raise ValueError("channel sourceVersion differs from checkout project version")
-            version = channel_request["version"]
+            version = _channel_version(channel_request, tag, commit, version)
         return cls(source, work, cache, commit, tag, version, variant, current_target(), bundle_env,
                    channel_request, release_epoch)
 
