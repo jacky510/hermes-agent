@@ -48,16 +48,12 @@ def sha256_file(file: Path) -> str:
 
 
 def stamp_matches(stamp: dict, tag: str, commit: str, *, channel_request: dict | None = None) -> None:
-    if channel_request is not None and channel_request.get("receiverCandidate"):
-        if (stamp.get("channelBuild") is not None or stamp.get("source") != "build"
-                or stamp.get("receiverProtocol") != 1 or stamp.get("displayVersion") != channel_request["version"]
-                or stamp.get("commit") != commit or stamp.get("tag") != channel_request["releaseTag"]
-                or stamp.get("baseVersion") != channel_request["sourceVersion"]):
-            raise ValueError("Receiver candidate must use ordinary stable update ownership")
-        return
     if channel_request is not None:
+        # A channel build's packages carry its claim as their tag and the request as their update
+        # owner (the channel protocol), never a release channel's.
         if (stamp.get("source") != "channel-build" or stamp.get("channelBuild") != channel_request
-                or stamp.get("commit") != channel_request["commit"] or stamp.get("tag")):
+                or stamp.get("commit") != channel_request["commit"] or commit != channel_request["commit"]
+                or stamp.get("tag") != channel_request["releaseTag"] or tag != channel_request["releaseTag"]):
             raise ValueError("Built package provenance does not match the channel request")
         return
     if (stamp.get("commit") != commit or stamp.get("tag") != tag

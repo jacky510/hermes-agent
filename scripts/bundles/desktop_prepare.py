@@ -114,7 +114,7 @@ class BuildRequest:
             channel_request = validate_channel_request(channel_request)
             if variant != "bundled":
                 raise ValueError("channel builds currently support only the bundled variant")
-            if tag or commit not in (None, channel_request["commit"]):
+            if tag not in (None, channel_request["releaseTag"]) or commit not in (None, channel_request["commit"]):
                 raise ValueError("channel request conflicts with tag or commit selection")
             if bundle_env and bundle_env != channel_request["bundleEnv"]:
                 raise ValueError("bundle defaults conflict with channel request")

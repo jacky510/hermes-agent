@@ -16,7 +16,10 @@ export function channelBuildRequest(env = process.env) {
   if (!env._HERMES_CHANNEL_REQUEST_JSON) return null
   const value = JSON.parse(env._HERMES_CHANNEL_REQUEST_JSON)
   if (env.HERMES_DESKTOP_VARIANT !== 'bundled') throw new Error('Channel builds support only bundled packaging')
-  if (env.HERMES_BUILD_COMMIT || env.HERMES_PAYLOAD_TAG) throw new Error('Channel request conflicts with commit or tag identity')
+  // A channel build carries no commit identity and no tag but its own claim (the request's releaseTag).
+  if (env.HERMES_BUILD_COMMIT || (env.HERMES_PAYLOAD_TAG && (env.HERMES_PAYLOAD_TAG !== value.releaseTag || !CHANNEL_TAG_RE.test(env.HERMES_PAYLOAD_TAG)))) {
+    throw new Error('Channel request conflicts with commit or tag identity')
+  }
   // The bundled toolchain already supplies Python. Reuse the authoritative
   // validator rather than maintaining a third protocol decoder for packaging.
   const validator = [
@@ -278,7 +281,7 @@ export function appIdentity(desktopDir, tag = process.env.HERMES_PAYLOAD_TAG || 
   const repoRoot = path.resolve(desktopDir, '..', '..')
   const request = channelBuildRequest()
   if (request) {
-    if (tag) throw new Error('Channel builds must not select a release tag')
+    if (tag && tag !== request.releaseTag) throw new Error('Channel builds carry only their own claim tag')
     return { identity, version: request.windowsVersion, fileVersion: request.version, name: identity.artifactNamePascal }
   }
   // Commit artifacts retain app semver but do not advance an update channel. A commit build that
