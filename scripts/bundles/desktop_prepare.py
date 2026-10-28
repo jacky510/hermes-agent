@@ -211,7 +211,7 @@ class BuildRequest:
         if self.channel_request is None:
             return
         channel = validate_channel_request(self.channel_request)
-        if (self.variant != "bundled" or self.tag is not None or self.commit != channel["commit"]
+        if (self.variant != "bundled" or self.tag not in (None, channel["releaseTag"]) or self.commit != channel["commit"]
                 or self.version != channel["version"] or self.bundle_env != channel["bundleEnv"]):
             raise ValueError("prepared build differs from admitted channel request")
 
