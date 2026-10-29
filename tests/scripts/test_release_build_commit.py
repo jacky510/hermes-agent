@@ -94,8 +94,12 @@ else:
 
 
 def claims(upstream):
-    """The commit build claim tags the remote holds, newest last."""
-    listed = git(upstream, 'tag', '--list', 'commit.*', '--sort=creatordate')
+    """The remote's commit claims in UTC claim-stamp order, newest last.
+
+    Tagger dates can tie, leaving the user's tag.sort as a secondary key.
+    These fixed-width claim names order by their timestamp without that tie.
+    """
+    listed = git(upstream, 'tag', '--list', 'commit.*', '--sort=refname')
     return listed.split() if listed else []
 
 
