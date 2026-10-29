@@ -17,7 +17,11 @@ The platform knows nothing about verify-kit: it reads only ``gate.replay`` /
 ``gate.probes`` and exit codes, so the verification runner can change without
 touching this module. Modes: ``off`` (silent), ``shadow`` (record + comment, never
 block), ``enforce`` (block). Resolution order per call: ``HERMES_KANBAN_VERIFY_GATE``
-env override, then ``kanban.verify_gate_mode`` config (default shadow). Cards with
+env override, then ``kanban.verify_gate_mode`` config (default shadow) — a boolean
+``False`` there (what ``config set kanban.verify_gate_mode off`` actually stores,
+via the CLI's scalar-word coercion on this unregistered key) reads as ``off``.
+Enforce blocks only on enforce-level delivery trees; ``backend``/``tools``/
+``design`` are warn trees — recorded + commented, never blocking (P6). Cards with
 no marker are a <1ms line scan and nothing else.
 """
 from __future__ import annotations
@@ -28,7 +32,7 @@ import logging
 import os
 import subprocess
 import time
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -210,6 +214,12 @@ def gate_mode() -> str:
         # shadow is the safe default (records, never blocks).
         logger.debug("verify-gate: config read failed; defaulting mode", exc_info=True)
         return "shadow"
+    if mode is False:
+        # `hermes config set kanban.verify_gate_mode off` stores the boolean False:
+        # the key is unregistered in DEFAULT_CONFIG, so the CLI's scalar-word table
+        # coerces "off" (same for false/no/0). Honor it as the off it spelled; any
+        # other unlisted value still fails safe to shadow.
+        return "off"
     return mode if mode in MODES else "shadow"
 
 
@@ -367,11 +377,18 @@ def _sha256_of(path: Path) -> Optional[str]:
 
 def _failures_comment(decl: dict, trigger: str, failure: GateError, results: list,
                       check_sha256: Optional[str], mode: str, tid: str,
-                      escalate: bool) -> str:
+                      escalate: bool, level: str = "enforce") -> str:
     last = results[-1] if results else None
+    if mode == "shadow":
+        tag, verdict_txt = "[shadow]", "将被拒绝（shadow 记录）"
+    elif level == "warn":
+        tag, verdict_txt = "[warn]", "不拦截（warn 交付树：只记审计+评注）"
+    else:
+        tag, verdict_txt = "", "拒绝"
+    level_note = f", level={level}" if level == "warn" else ""
     lines = [
-        f"[verify-gate]{'[shadow]' if mode == 'shadow' else ''} kanban_complete "
-        f"{'将被拒绝（shadow 记录）' if mode == 'shadow' else '拒绝'}（task {tid}, mode={mode}）",
+        f"[verify-gate]{tag} kanban_complete "
+        f"{verdict_txt}（task {tid}, mode={mode}{level_note}）",
         f"- 触发项：{trigger}",
     ]
     if last:
@@ -410,14 +427,15 @@ def _consecutive_infra_rejections(conn, tid: str) -> int:
 
 
 def _record_failure(conn, tid: str, mode: str, trigger: str, failure: GateError,
-                    results: list, check_sha256: Optional[str], decl: dict) -> None:
+                    results: list, check_sha256: Optional[str], decl: dict,
+                    level: str = "enforce") -> None:
     """Audit event + card comment. Neither may block the refusal itself (comment
     write failures degrade to a warning log)."""
     from agent.redact import redact_sensitive_text
     from hermes_cli import kanban_db as kb
     escalate = failure.infra and _consecutive_infra_rejections(conn, tid) + 1 >= INFRA_ESCALATION_AFTER
     payload = {
-        "mode": mode, "trigger": trigger, "infra": failure.infra,
+        "mode": mode, "level": level, "trigger": trigger, "infra": failure.infra,
         "check_sha256": check_sha256,
         "commands": [{k: r[k] for k in ("cmd", "rc", "elapsed_s", "infra")} for r in results],
         "decl": {k: decl.get(k) for k in ("check", "delivery", "kind", "timeout")},
@@ -429,7 +447,8 @@ def _record_failure(conn, tid: str, mode: str, trigger: str, failure: GateError,
         logger.warning("verify-gate: could not land %s event on %s", REJECTED_EVENT, tid, exc_info=True)
     try:
         kb.add_comment(conn, tid, author="verify-gate", body=redact_sensitive_text(
-            _failures_comment(decl, trigger, failure, results, check_sha256, mode, tid, escalate)))
+            _failures_comment(decl, trigger, failure, results, check_sha256, mode, tid,
+                              escalate, level)))
     except Exception:
         logger.warning("verify-gate: could not comment failure report on %s", tid, exc_info=True)
 
@@ -439,6 +458,28 @@ def _reject(message: str):
     (still in-flight, repair instructions, no kanban_block nudge)."""
     from tools.kanban_tools import _Reject  # lazy: kanban_tools imports this module
     return _Reject(message)
+
+
+# --- Delivery-tree gate levels (P6) ----------------------------------------------
+
+# backend/tools/design stay warn until their lint budgets are re-baselined
+# (delivery-tree-gate-levels, t_b541fe02): the gate records + comments but never
+# blocks there, even in enforce mode. Everything else — cards with no delivery
+# declaration and unlisted trees — stays enforce (fail-safe: the gate keeps its
+# full blocking power anywhere the levels are not explicitly relaxed).
+WARN_DELIVERY_TREES = frozenset({"backend", "tools", "design"})
+
+
+def delivery_tree_level(decl: dict) -> str:
+    """``"warn"`` when the marker's ``delivery=`` names a warn tree, else ``"enforce"``.
+
+    The tree is the first path component of the declared delivery dir (Windows or
+    POSIX separators both normalize); cards without a ``delivery=`` declaration and
+    unlisted trees default to ``"enforce"``.
+    """
+    delivery = str(decl.get("delivery") or "").replace("\\", "/").strip().strip("/")
+    tree = delivery.split("/", 1)[0].lower() if delivery else ""
+    return "warn" if tree in WARN_DELIVERY_TREES else "enforce"
 
 
 # --- Entry point ----------------------------------------------------------------
@@ -471,6 +512,7 @@ def verify_gate(conn, task, tid: str, *, mode: Optional[str] = None,
         mode = mode or gate_mode()
         if mode == "off" or decl["kind"] == "doc":
             return None
+        level = delivery_tree_level(decl)
         started = time.monotonic()
         workspace = _workspace()
         check_path = resolve_path(decl["check"], workspace)
@@ -497,8 +539,9 @@ def verify_gate(conn, task, tid: str, *, mode: Optional[str] = None,
                 trigger = "bugfix 回归探针 diff"
         elapsed = round(time.monotonic() - started, 2)
         if failure:
-            _record_failure(conn, tid, mode, trigger, failure, results, check_sha256, decl)
-            if mode == "enforce":
+            _record_failure(conn, tid, mode, trigger, failure, results, check_sha256,
+                            decl, level)
+            if mode == "enforce" and level == "enforce":
                 raise _reject(
                     f"kanban_complete blocked by verify-gate (mode=enforce, task {tid}): "
                     f"{failure}. Your task is still in-flight (no state change) — this is a "
@@ -509,8 +552,9 @@ def verify_gate(conn, task, tid: str, *, mode: Optional[str] = None,
             verdict = "would_reject"
         else:
             verdict = "pass"
-        meta = {"mode": mode, "verdict": verdict, "check_sha256": check_sha256,
-                "replayed": len(results), "elapsed_s": elapsed}
+        meta = {"mode": mode, "level": level, "verdict": verdict,
+                "check_sha256": check_sha256, "replayed": len(results),
+                "elapsed_s": elapsed}
         if decl["kind"] == "bugfix":
             baseline = _baseline_probe_ids(conn, tid)
             meta["baseline"] = "diff" if baseline is not None else "missing-fallback"
@@ -522,16 +566,17 @@ def verify_gate(conn, task, tid: str, *, mode: Optional[str] = None,
         # Contract/deck failures raised outside _run_replay still owe the board a
         # record before the refusal (D7: steps 1+3 happen even for hard failures).
         if decl is not None and mode != "off":
+            level = delivery_tree_level(decl)
             try:
                 _record_failure(conn, tid, mode or gate_mode(),
-                                "check.json 契约", exc, [], None, decl)
+                                "check.json 契约", exc, [], None, decl, level)
             except Exception:
                 logger.warning("verify-gate: failure recording itself failed", exc_info=True)
-            if (mode or gate_mode()) == "enforce":
+            if (mode or gate_mode()) == "enforce" and level == "enforce":
                 raise _reject(
                     f"kanban_complete blocked by verify-gate (task {tid}): {exc}. Your task is "
                     "still in-flight (no state change). Repair the declaration/contract named "
                     "above, then retry kanban_complete with the same handoff.") from exc
-            return {"mode": mode or gate_mode(), "verdict": "would_reject",
-                    "error": str(exc)}
+            return {"mode": mode or gate_mode(), "level": level,
+                    "verdict": "would_reject", "error": str(exc)}
         raise _reject(f"kanban_complete blocked by verify-gate: {exc}") from exc

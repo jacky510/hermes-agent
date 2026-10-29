@@ -303,3 +303,93 @@ def test_dispatch_baseline_records_probes_and_tolerates_missing_file(board, monk
         conn.close()
     record_dispatch_baseline(task3, str(board.ws), None)
     assert board.events(tid3, "verify_gate_baseline") == []
+
+
+# --- Leg 8: off reachable via the config path (CLI coerces "off" to False) ------
+
+def test_gate_mode_treats_config_false_as_off(board, monkeypatch):
+    """`config set kanban.verify_gate_mode off` stores boolean False (the key is
+    unregistered, so the CLI's scalar-word table coerces it); gate_mode must read
+    that as off instead of falling back to shadow (t_3ed4f473 drill 4)."""
+    config_home = board.ws.parent / ".hermes"
+    (config_home / "config.yaml").write_text(
+        "kanban:\n  verify_gate_mode: false\n", encoding="utf-8")
+    monkeypatch.delenv("HERMES_KANBAN_VERIFY_GATE", raising=False)
+    from tools.kanban_verify_gate import gate_mode
+    assert gate_mode() == "off"
+
+
+def test_gate_mode_treats_config_true_as_shadow(board, monkeypatch):
+    """Boolean True is equally coerced garbage; it must fail safe to shadow."""
+    config_home = board.ws.parent / ".hermes"
+    (config_home / "config.yaml").write_text(
+        "kanban:\n  verify_gate_mode: true\n", encoding="utf-8")
+    monkeypatch.delenv("HERMES_KANBAN_VERIFY_GATE", raising=False)
+    from tools.kanban_verify_gate import gate_mode
+    assert gate_mode() == "shadow"
+
+
+def test_off_via_config_bool_false_skips_gate_end_to_end(board, monkeypatch):
+    config_home = board.ws.parent / ".hermes"
+    (config_home / "config.yaml").write_text(
+        "kanban:\n  verify_gate_mode: false\n", encoding="utf-8")
+    monkeypatch.delenv("HERMES_KANBAN_VERIFY_GATE", raising=False)
+    board.write_check([FAIL_CMD])
+    tid, run_id = board.make_task("verify-gate: check=check.json\n")
+    out = call_complete(board, tid, run_id)
+    assert out.get("ok") is True
+    assert "verify_gate" not in out
+    assert board.events(tid, "verify_gate_rejected") == []
+    assert board.status(tid) == "done"
+
+
+# --- Leg 9: delivery-tree gate levels (P6) ---------------------------------------
+
+def test_delivery_tree_level_mapping():
+    from tools.kanban_verify_gate import delivery_tree_level
+    for tree in ("frontend", "docs", "app", "frontend/src"):
+        assert delivery_tree_level({"delivery": tree}) == "enforce", tree
+    for tree in ("backend", "tools", "design", "backend/tools"):
+        assert delivery_tree_level({"delivery": tree}) == "warn", tree
+    # No delivery declaration / unlisted tree -> enforce (fail-safe).
+    assert delivery_tree_level({"check": "c.json"}) == "enforce"
+    assert delivery_tree_level({}) == "enforce"
+
+
+def test_warn_tree_failure_does_not_block_in_enforce(board, monkeypatch):
+    monkeypatch.setenv("HERMES_KANBAN_VERIFY_GATE", "enforce")
+    board.write_check([FAIL_CMD])
+    tid, run_id = board.make_task("verify-gate: check=check.json delivery=backend\n")
+    out = call_complete(board, tid, run_id)
+    assert out.get("ok") is True
+    gate = out["verify_gate"]
+    assert gate["verdict"] == "would_reject"
+    assert gate["level"] == "warn"
+    (comment,) = [c for c in board.comments(tid) if c.author == "verify-gate"]
+    assert "[warn]" in comment.body
+    assert board.events(tid, "verify_gate_rejected")
+    assert board.status(tid) == "done"
+
+
+def test_enforce_tree_failure_still_blocks_in_enforce(board, monkeypatch):
+    monkeypatch.setenv("HERMES_KANBAN_VERIFY_GATE", "enforce")
+    board.write_check([FAIL_CMD])
+    tid, run_id = board.make_task("verify-gate: check=check.json delivery=frontend\n")
+    out = call_complete(board, tid, run_id)
+    assert out.get("error")
+    assert "kanban_complete blocked" in out["error"]
+    rejections = board.events(tid, "verify_gate_rejected")
+    assert rejections[0].payload["level"] == "enforce"
+    assert board.status(tid) == "running"
+
+
+def test_warn_tree_pass_records_pass_with_level(board, monkeypatch):
+    monkeypatch.setenv("HERMES_KANBAN_VERIFY_GATE", "enforce")
+    (board.ws / "verify_kit.py").write_text("import sys; sys.exit(0)\n", encoding="utf-8")
+    board.write_check([PASS_CMD, [sys.executable, "verify_kit.py", "delivery", "tools"]])
+    tid, run_id = board.make_task("verify-gate: check=check.json delivery=tools\n")
+    out = call_complete(board, tid, run_id)
+    assert out.get("ok") is True
+    assert out["verify_gate"]["verdict"] == "pass"
+    assert out["verify_gate"]["level"] == "warn"
+    assert board.status(tid) == "done"
