@@ -63,8 +63,9 @@ _CANARY_TAG_RE = re.compile(rf"^canary\.(?P<stamp>20\d{{6}}T\d{{6}}Z)-v(?P<core>
 # builds publish nowhere and their installs refuse updates (install stamp ``source: commit-build``).
 _COMMIT_TAG_RE = re.compile(rf"^commit\.(?P<stamp>20\d{{6}}T\d{{6}}Z)-v(?P<core>{_VERSION_CORE})$")
 # A channel build's claim tag: ``channel.<YYYYMMDDTHHMMSSZ>-v<pyproject version at the commit>``.
-# The channel name, branding and bundle defaults live in the annotated claim; the packages carry
-# the channel request's own identity and ``0.0.<sequence>`` versions, never the tag's.
+# The channel name, branding and bundle defaults live in the annotated claim. Desktop packages use the
+# admitted request's identity and the claim's version (<core>+channel.<stamp>); native Windows
+# versions derive from that claim's timestamp, not the channel allocation sequence.
 _CHANNEL_TAG_RE = re.compile(rf"^channel\.(?P<stamp>20\d{{6}}T\d{{6}}Z)-v(?P<core>{_VERSION_CORE})$")
 # Every prefix-kind claim tag that is its own release identity: kind, stamp, core.
 _KIND_TAG_RE = re.compile(rf"^(?P<kind>canary|commit|channel)\.(?P<stamp>20\d{{6}}T\d{{6}}Z)-v(?P<core>{_VERSION_CORE})$")

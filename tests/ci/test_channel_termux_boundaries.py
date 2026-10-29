@@ -43,7 +43,7 @@ def test_termux_claim_shell_stamp_to_candidate(tmp_path, request, kind):
     assert f"Version: {version}\n" in index and f"Filename: pool/{tag}/" in index
     result = stage_from_workflow(tmp_path, server, tag, origin.base)
     assert result.returncode == 0, result.stdout + result.stderr
-    # Candidate assembly also requires a desktop smoke; use the existing real macOS record/handoff fixture.
+    # Exercise a mixed desktop/Termux candidate with the real macOS record/handoff fixture.
     desktop = run_stage(tmp_path / "desktop", server, tag, "arm64", feed=True,
                         channel_request=channel_request(COMMIT) if kind == "channel" else None)
     assert desktop.returncode == 0, desktop.stdout + desktop.stderr
