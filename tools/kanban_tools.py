@@ -17,6 +17,7 @@ from typing import Any, Callable, Optional
 
 from agent.redact import redact_sensitive_text
 from hermes_cli.goals import judge_goal
+from tools import kanban_verify_gate
 from tools.registry import no_cache_check_fn, registry, tool_error
 from hermes_cli.config import cfg_get, load_config
 from tools.kanban_tools_schemas import (
@@ -746,6 +747,14 @@ def _handle_complete(args: dict, **kw) -> str:
         # actually reachable — see _goal_judge_available for why an unavailable judge fails open.
         task = kb.get_task(conn, tid)
         _goal_gate("kanban_complete", task, tid, (summary or result or "").strip())
+        # Verify-gate (card t_8e5d573e / plan §3): cards declaring a `verify-gate:` marker must
+        # replay their check.json commands to rc==0 before the write txn. Shadow mode records
+        # would-rejects without blocking; no marker → <1ms scan, None, zero behaviour change.
+        gate_meta = kanban_verify_gate.verify_gate(conn, task, tid)
+        gate_extra = {"verify_gate": gate_meta} if gate_meta is not None else {}
+        if gate_meta is not None:
+            metadata = dict(metadata or {})
+            metadata["verify_gate"] = gate_meta
         try:
             ok = kb.complete_task(
                 conn, tid, result=result, summary=summary, metadata=metadata,
@@ -805,7 +814,7 @@ def _handle_complete(args: dict, **kw) -> str:
         return _ok(task_id=tid, run_id=run.id if run else None,
                    attachments=[
                        _fields(a, _ATTACHMENT_FIELDS)
-                       for a in kb.list_attachments(conn, tid)])
+                       for a in kb.list_attachments(conn, tid)], **gate_extra)
 
 
 @_kanban_handler("kanban_block")

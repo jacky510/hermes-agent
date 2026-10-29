@@ -26,6 +26,7 @@ from typing import Mapping
 from typing import Optional
 from typing import TYPE_CHECKING
 
+from hermes_cli.kanban_worker_exit import exit_code_kind
 from hermes_cli.quiet_single_query import KANBAN_WORKER_EXIT_TRAILER
 
 if TYPE_CHECKING:
@@ -237,21 +238,10 @@ def _classify_worker_exit(pid: int) -> tuple[str, Optional[int]]:
     raw = int(raw)
     signal_number = raw & 0x7F
     if signal_number == 0:
-        return _exit_code_kind((raw >> 8) & 0xFF)
+        return exit_code_kind((raw >> 8) & 0xFF)
     if signal_number != 0x7F:
         return ("signaled", signal_number)
     return ("unknown", None)
-
-
-def _exit_code_kind(code: int) -> tuple[str, int]:
-    """``(kind, code)`` for a worker's exit code, however it was observed."""
-    if code == 0:
-        return ("clean_exit", 0)
-    if code == _kb.KANBAN_RATE_LIMIT_EXIT_CODE:
-        return ("rate_limited", code)
-    if code == _kb.KANBAN_TERMINAL_PROVIDER_EXIT_CODE:
-        return ("terminal_provider", code)
-    return ("nonzero_exit", code)
 
 
 _EXIT_TRAILER_RE = re.compile(
@@ -1097,11 +1087,11 @@ def _classify_dead_worker_exit(
     """
     kind, code = _classify_worker_exit(pid)
     if exit_code is not None:
-        kind, code = _exit_code_kind(int(exit_code))
+        kind, code = exit_code_kind(int(exit_code))
     elif kind == "unknown" and task_id:
         logged = _worker_log_exit_code(task_id, board=board)
         if logged is not None:
-            kind, code = _exit_code_kind(logged)
+            kind, code = exit_code_kind(logged)
     if kind == "clean_exit":
         # rc=0 while still ``running``: usually the work succeeded and only the
         # paperwork was skipped; the corrective sentence reaches the retry
@@ -2853,6 +2843,11 @@ def _default_spawn(task: Task, workspace: str, *, board: Optional[str] = None) -
     # kanban_comment reads HERMES_PROFILE for its default author; `-p` alone
     # doesn't set the env var.
     env["HERMES_PROFILE"] = profile_arg
+    # Verify-gate plan §4.6: freeze the card's declared probe baseline at dispatch
+    # time (best-effort; lives in tools.kanban_verify_gate — this file is over its
+    # line ratchet and may only shrink).
+    from tools.kanban_verify_gate import record_dispatch_baseline
+    record_dispatch_baseline(task, workspace, board)
     # This is the grant boundary: the dispatcher assigned this new worker's task.
     from agent.delegation_context import DELEGATED_CHILD_ENV_MARKER
     env.pop(DELEGATED_CHILD_ENV_MARKER, None)
