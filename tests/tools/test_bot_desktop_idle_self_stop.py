@@ -167,6 +167,29 @@ def test_a_killed_sleep_does_not_end_the_self_stop(abandoned_screen):
     wait_until(lambda: not _alive(launcher), timeout=60, what="the screen to stop itself after its sleep was killed")
 
 
+def test_a_self_stop_that_turns_itself_off_is_reported(abandoned_screen, tmp_path):
+    """A sleep that cannot sleep ends the watch loop (rather than spinning the check): that screen will never
+    stop itself now, which is what an operator needs to hear. The record waits in the home's spool for a gateway."""
+    import shutil
+
+    from agent.monitoring import managed_processes
+
+    real = shutil.which("sleep")
+    # Only the watch loop's first sleep (9 s for this window) fails; the stub X server's `sleep 600` is real.
+    (tmp_path / "bin" / "sleep").write_text(f'#!/bin/sh\n[ "$1" = 9 ] && exit 1\nexec "{real}" "$@"\n', encoding="utf-8")
+    (tmp_path / "bin" / "sleep").chmod(0o755)
+    home = tmp_path / "home"
+    managed_processes.set_spooling([home], True)
+    sd, launcher = abandoned_screen(idle_stop_minutes=0.15)
+    wait_until(lambda: any(managed_processes.spool_dir(home).glob("*.json")), timeout=20,
+               what="the launcher's record that its self-stop is off")
+    (event,) = managed_processes.drain_spool([home])
+    assert (event.subsystem, event.action, event.outcome, event.actor) == (
+        "bot_desktop", "self_stop_off", "sleep_failed", "screen")
+    assert "sleep failed; off for this screen" in (sd / "launcher.log").read_text(encoding="utf-8", errors="replace")
+    assert _alive(launcher), "giving up the self-stop must not take the screen down"
+
+
 def test_a_screen_in_use_is_kept_and_a_returning_gateway_reattaches(abandoned_screen, monkeypatch):
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
     from tools.bot_desktop import runtime
