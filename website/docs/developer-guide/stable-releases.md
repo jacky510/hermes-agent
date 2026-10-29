@@ -417,8 +417,9 @@ A commit build differs from a release in three ways:
 - **Publication:** none. Its only publication job, `publish-commit`, renders
   the accepted candidate's page at
   `releases/tag/commit.<stamp>-v<version>/index.html` and in the run summary
-  (waiting for every suite with `--require-green`, the default, or only for
-  the built and smoked candidate with `--no-require-green`). Channel and feed
+  (after the selected suites finish; `--require-green`, the default, also
+  requires them to pass, while `--no-require-green` permits unrelated failures
+  if the candidate built and passed smoke tests). Channel and feed
   writers, the Docker push and the Store refuse a commit tag. The Docker image
   is still built and tested.
 

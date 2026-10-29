@@ -207,8 +207,9 @@ The version comes from `pyproject.toml` at `REV`; no GitHub release is created.
 Commit claims start from the stable default lanes minus `upgrade`, `install-e2e`
 and `windows-store`, which they cannot run. Use `--only`, `--with` and `--without`
 to select lanes; macOS Intel and Termux are opt-in. `--require-green` is the
-default; `--no-require-green` allows the downloads page once the candidate is
-built and smoked even if unrelated suites fail. See the canonical
+default; `--no-require-green` still waits for the selected suites to finish,
+but allows the downloads page if the candidate built and passed smoke tests
+even when unrelated suites fail. See the canonical
 [commit-build pipeline guide](../../website/docs/developer-guide/stable-releases.md#commit-builds).
 
 Use repeatable `--bundle-env NAME=VALUE` options to bake non-secret runtime

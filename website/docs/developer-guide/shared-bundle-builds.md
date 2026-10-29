@@ -344,14 +344,19 @@ The signature-result cache is separate. Native wheel partitions depend on
 observed compiler/SDK/OpenSSL identity; incomplete identity deliberately forgoes
 warm reuse. This is not a fully pinned host SDK.
 
-Cache keys are lookup hints, not authorization. Each native target has one
-build job (`cache-mode: write`), which every claim kind runs. Only reviewed
-claims (stable, canary) run its save step; commit and channel claims build
-unreviewed commits, so they restore but never save. That guard is the save
-step's own `if`, not a scoped token: what keeps a bad snapshot out of a build is
-preparation, which admits every restored input before use. A skipped save or a
-different key prefix alone cannot prevent a script from poisoning a writer
-namespace.
+Cache keys are lookup hints, not authorization. Each native desktop target has
+one build job (`cache-mode: write`), which every claim kind runs. Stable/canary
+claims may save prepared dependency inputs, Windows bundle-assembly caches,
+and Windows/macOS payload signatures. The input tag's `commit.` and `channel.`
+prefixes disable all of those native save steps without disabling restoration
+or preparation. This policy does not disable separate setup-pm or Termux caches.
+
+These step guards are workflow policy, not token-enforced isolation: preview
+code still runs in credentialed signing jobs, and write/dispatch access is the
+trust boundary. Preparation re-admits restored inputs, and signature caches
+retain their content/signature verification. A skipped save or a different key
+prefix alone cannot prevent code with a writable token from writing to the
+cache namespace.
 Default-branch canary dispatch retains default-branch cache scope; changing a
 checkout SHA does not change the workflow ref's cache scope. See GitHub's
 [cache access contract](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#controlling-cache-access-with-cache-mode).
